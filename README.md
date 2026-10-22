@@ -86,3 +86,7 @@ Dopo che il server ha messo in contatto viewer e host, i due si scambiano i prop
 - Il viewer mostra nella barra `QUIC diretto N ms` oppure `relay TCP`.
 - Il server deve avere aperta anche la **porta UDP** (la stessa del TCP, 21116). Il firewall di Windows può chiedere il consenso al primo avvio del client.
 - `DECOREMOTE_NO_UDP=1` disattiva il collegamento diretto (utile per diagnosi).
+
+## Licenza
+
+MIT, vedi [LICENSE](LICENSE). `vendor/scrap` è una copia modificata di [scrap](https://github.com/quadrupleslap/scrap), anch'essa con licenza MIT.
