@@ -1,0 +1,13 @@
+[package]
+name = "deco-codec"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+libaom-sys = "0.17.2"
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
+yuv = "0.8.19"
+
+[dev-dependencies]
+scrap = { path = "../../vendor/scrap" }

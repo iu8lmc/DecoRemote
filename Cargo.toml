@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = ["crates/deco-proto", "crates/deco-server", "crates/deco-app", "crates/deco-codec", "crates/deco-net"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

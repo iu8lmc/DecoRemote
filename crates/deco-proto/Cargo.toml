@@ -1,0 +1,13 @@
+[package]
+name = "deco-proto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+argon2 = "0.6.0"
+bincode = "1"
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+snow = "0.10.0"
+tokio = { version = "1.54.1", features = ["io-util", "net", "rt", "macros"] }
