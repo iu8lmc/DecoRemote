@@ -97,7 +97,7 @@ impl App {
             return;
         }
         self.notice = None;
-        let viewer = Viewer::connect(&self.rt, ctx.clone(), self.cfg.server.clone(), target, self.peer_pw.clone());
+        let viewer = Viewer::connect(&self.rt, ctx.clone(), self.cfg.server.clone(), target, self.peer_pw.trim().to_string());
         self.view = Some(ViewerState {
             viewer,
             texture: None,

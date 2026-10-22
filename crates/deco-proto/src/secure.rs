@@ -90,7 +90,7 @@ where
     write_frame(&mut w, &buf[..n]).await?;
 
     let mut inbound = Vec::new();
-    read_frame(&mut r, &mut inbound).await.context("handshake: l'host non risponde (password errata?)")?;
+    read_frame(&mut r, &mut inbound).await.context("handshake: l'host ha chiuso la connessione, quasi sempre perché la password è errata")?;
     hs.read_message(&inbound, &mut buf).context("handshake: password errata")?;
     Ok(split(r, w, hs.into_stateless_transport_mode()?))
 }
