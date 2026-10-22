@@ -17,7 +17,7 @@ curl -fsSL https://raw.githubusercontent.com/iu8lmc/DecoRemote/main/deploy/insta
 
 Scarica il binario statico dalla release (verificando lo SHA-256), crea il servizio `decoremote-server`
 (utente temporaneo, sandbox systemd) e apre le porte in `ufw`/`firewalld` se attivi.
-`VERSION=v0.1.0` e `PORT=21116` si possono cambiare con variabili d'ambiente.
+`VERSION=v0.1.1` e `PORT=21116` si possono cambiare con variabili d'ambiente.
 
 ```bash
 systemctl status decoremote-server

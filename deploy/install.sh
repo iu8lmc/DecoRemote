@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Installa il server DecoRemote come servizio systemd su un VPS Linux x86_64.
 # Uso (come root):   curl -fsSL https://raw.githubusercontent.com/iu8lmc/DecoRemote/main/deploy/install.sh | sudo bash
-# Variabili:  VERSION=v0.1.0  (release da scaricare)   PORT=21116
+# Variabili:  VERSION=v0.1.1  (release da scaricare)   PORT=21116
 set -euo pipefail
 
-VERSION="${VERSION:-v0.1.0}"
+VERSION="${VERSION:-v0.1.1}"
 PORT="${PORT:-21116}"
 REPO="iu8lmc/DecoRemote"
 BASE="https://github.com/${REPO}/releases/download/${VERSION}"
