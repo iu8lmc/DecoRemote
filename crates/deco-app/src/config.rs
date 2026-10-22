@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_SERVER: &str = "127.0.0.1:21116";
+pub const DEFAULT_SERVER: &str = "15.235.240.243:21116";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {

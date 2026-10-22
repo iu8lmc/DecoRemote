@@ -38,6 +38,8 @@ cargo build --release
 .\target\release\decoremote.exe --server IP_DEL_SERVER:21116
 ```
 
+Se non si indica `--server`, il client usa `15.235.240.243:21116` (vedi `DEFAULT_SERVER` in `crates/deco-app/src/config.rs`); l'indirizzo si cambia anche da *Impostazioni*.
+
 Il client mostra il proprio ID e la password; sull'altro computer si inseriscono ID e password del partner e si preme **Connetti**.
 Opzioni: `--connect ID --password PW` per collegarsi subito all'avvio. `DECOREMOTE_HOME=<cartella>` sposta il file di configurazione (utile per provare due istanze sullo stesso PC).
 
