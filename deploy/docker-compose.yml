@@ -1,0 +1,10 @@
+services:
+  decoremote-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "21116:21116/tcp"
+      - "21116:21116/udp"
+      - "21117:21117/udp"
