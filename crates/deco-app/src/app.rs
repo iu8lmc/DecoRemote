@@ -29,6 +29,12 @@ struct ViewerState {
     cursor_tex: std::collections::HashMap<u64, egui::TextureHandle>,
     held: Vec<MouseBtn>,
     quality: u8,
+    /// Adatta l'immagine alla finestra; altrimenti vale `zoom`.
+    fit: bool,
+    /// Ingrandimento manuale in percentuale (100 = un pixel remoto per pixel dello schermo locale).
+    zoom: f32,
+    /// Percentuale con cui l'immagine entra nella finestra (calcolata al frame precedente).
+    fit_pct: f32,
     /// Statistiche mostrate nella barra, aggiornate una volta al secondo.
     stat_at: std::time::Instant,
     stat_frames: u64,
@@ -102,6 +108,9 @@ impl App {
             cursor_tex: Default::default(),
             held: Vec::new(),
             quality: 60,
+            fit: true,
+            zoom: 100.0,
+            fit_pct: 100.0,
             stat_at: std::time::Instant::now(),
             stat_frames: 0,
             stat_bytes: 0,
@@ -390,7 +399,8 @@ fn viewer_ui(
 
     egui::Panel::top("bar").show(root, |ui| {
         approval_prompt(ui, host);
-        ui.horizontal(|ui| {
+        // A capo quando la finestra è stretta, così nessun comando resta nascosto.
+        ui.horizontal_wrapped(|ui| {
             match &status {
                 ViewerStatus::Connecting => ui.label(RichText::new("Connessione…").color(WARN)),
                 ViewerStatus::WaitingApproval => {
@@ -423,12 +433,23 @@ fn viewer_ui(
                 if ui.add(egui::Slider::new(&mut vs.quality, 20..=95).show_value(false)).changed() {
                     vs.viewer.send(ViewerMsg::SetQuality(vs.quality));
                 }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Disconnetti").clicked() {
-                    close = true;
+                ui.label("Zoom");
+                let shown = if vs.fit { vs.fit_pct } else { vs.zoom }.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+                let mut pct = shown;
+                let slider = egui::Slider::new(&mut pct, ZOOM_RANGE.0..=ZOOM_RANGE.1).suffix("%").integer();
+                if ui.add(slider).changed() && (pct - shown).abs() >= 1.0 {
+                    (vs.fit, vs.zoom) = (false, pct);
                 }
-            });
+                if ui.selectable_label(vs.fit, "Adatta").on_hover_text("Adatta l'immagine alla finestra").clicked() {
+                    vs.fit = true;
+                }
+                if ui.selectable_label(!vs.fit && vs.zoom == 100.0, "1:1").on_hover_text("Un pixel remoto per pixel").clicked() {
+                    (vs.fit, vs.zoom) = (false, 100.0);
+                }
+            }
+            if ui.button("Disconnetti").clicked() {
+                close = true;
+            }
         });
     });
 
@@ -475,7 +496,7 @@ fn viewer_ui(
             });
             return;
         }
-        let Some(tex) = &vs.texture else {
+        let Some(tex_id) = vs.texture.as_ref().map(|t| t.id()) else {
             ui.centered_and_justified(|ui| {
                 let text = match status {
                     ViewerStatus::WaitingApproval => "In attesa che l'utente remoto consenta l'accesso…",
@@ -487,31 +508,67 @@ fn viewer_ui(
         };
         let avail = ui.available_rect_before_wrap();
         let [w, h] = vs.size;
-        let scale = (avail.width() / w as f32).min(avail.height() / h as f32);
-        let rect = egui::Rect::from_center_size(avail.center(), egui::vec2(w as f32, h as f32) * scale);
-        ui.painter().image(
-            tex.id(),
-            rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
-        forward_input(&ctx, vs, rect, std::mem::take(key_events));
-        draw_cursor(&ctx, ui, vs, rect);
+        let ppp = ctx.pixels_per_point();
+        let fit_scale = (avail.width() / w as f32).min(avail.height() / h as f32);
+        vs.fit_pct = fit_scale * ppp * 100.0;
+        let scale = if vs.fit { fit_scale } else { vs.zoom / 100.0 / ppp };
+        let size = egui::vec2(w as f32, h as f32) * scale;
+        let key_events = std::mem::take(key_events);
+        if size.x <= avail.width() + 0.5 && size.y <= avail.height() + 0.5 {
+            let rect = egui::Rect::from_center_size(avail.center(), size);
+            paint_remote(ui, &ctx, vs, tex_id, rect, rect, key_events);
+        } else {
+            // Immagine più grande della finestra: si scorre con le barre (la rotella resta all'host).
+            egui::ScrollArea::both()
+                .auto_shrink(false)
+                .scroll_source(egui::containers::scroll_area::ScrollSource::SCROLL_BAR)
+                .show(ui, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    // Le barre di scorrimento non devono inoltrare click all'host.
+                    let clip = rect.intersect(ui.clip_rect());
+                    let visible = egui::Rect::from_min_max(clip.min, (clip.max - egui::vec2(14.0, 14.0)).max(clip.min));
+                    paint_remote(ui, &ctx, vs, tex_id, rect, visible, key_events);
+                });
+        }
     });
 
     close
 }
 
+/// Estremi dello zoom manuale, in percentuale.
+const ZOOM_RANGE: (f32, f32) = (25.0, 200.0);
+
+/// Disegna l'immagine remota in `rect` e inoltra l'input. `visible` è la parte di `rect` realmente
+/// sotto il mouse (il resto è nascosto da barre o pannelli) e decide quali eventi vanno all'host.
+fn paint_remote(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    vs: &mut ViewerState,
+    tex_id: egui::TextureId,
+    rect: egui::Rect,
+    visible: egui::Rect,
+    key_events: Vec<egui::Event>,
+) {
+    ui.painter().image(
+        tex_id,
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    forward_input(ctx, vs, rect, visible, key_events);
+    draw_cursor(ctx, ui, vs, rect, visible);
+}
+
 /// Disegna il cursore dell'host sopra l'immagine. Mentre l'utente muove il mouse lo si mette dove
 /// sta il mouse locale: l'host seguirà entro pochi millisecondi, ma il cursore non aspetta la rete.
-fn draw_cursor(ctx: &egui::Context, ui: &egui::Ui, vs: &mut ViewerState, rect: egui::Rect) {
+fn draw_cursor(ctx: &egui::Context, ui: &egui::Ui, vs: &mut ViewerState, rect: egui::Rect, visible: egui::Rect) {
     const LOCAL_PRIORITY: std::time::Duration = std::time::Duration::from_millis(400);
     let (host_pos, shape_id, host_visible, shape) = {
         let cs = vs.viewer.cursor.lock().unwrap();
         (cs.pos, cs.shape, cs.visible, cs.shapes.get(&cs.shape).cloned())
     };
     let Some(shape) = shape else { return }; // forma non ancora arrivata: resta il cursore di sistema
-    let hover = ctx.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
+    let hover = ctx.input(|i| i.pointer.hover_pos()).filter(|p| visible.contains(*p));
     if hover.is_some() {
         ctx.set_cursor_icon(egui::CursorIcon::None);
     }
@@ -554,7 +611,13 @@ fn sync_mods(vs: &mut ViewerState, m: egui::Modifiers) {
     }
 }
 
-fn forward_input(ctx: &egui::Context, vs: &mut ViewerState, rect: egui::Rect, key_events: Vec<egui::Event>) {
+fn forward_input(
+    ctx: &egui::Context,
+    vs: &mut ViewerState,
+    rect: egui::Rect,
+    visible: egui::Rect,
+    key_events: Vec<egui::Event>,
+) {
     let (hover, events, current_mods) = ctx.input(|i| (i.pointer.hover_pos(), i.events.clone(), i.modifiers));
     let norm = |p: egui::Pos2| {
         (
@@ -565,7 +628,7 @@ fn forward_input(ctx: &egui::Context, vs: &mut ViewerState, rect: egui::Rect, ke
 
     sync_mods(vs, current_mods);
 
-    if let Some(p) = hover.filter(|p| rect.contains(*p)) {
+    if let Some(p) = hover.filter(|p| visible.contains(*p)) {
         let n = norm(p);
         if vs.last_pos != Some(n) {
             vs.last_pos = Some(n);
@@ -584,7 +647,7 @@ fn forward_input(ctx: &egui::Context, vs: &mut ViewerState, rect: egui::Rect, ke
                     _ => continue,
                 };
                 let (x, y) = norm(pos);
-                if pressed && rect.contains(pos) {
+                if pressed && visible.contains(pos) {
                     vs.held.push(b);
                     vs.viewer.send(ViewerMsg::MouseButton { button: b, pressed, x, y });
                 } else if !pressed && vs.held.contains(&b) {
@@ -593,7 +656,7 @@ fn forward_input(ctx: &egui::Context, vs: &mut ViewerState, rect: egui::Rect, ke
                     vs.viewer.send(ViewerMsg::MouseButton { button: b, pressed, x, y });
                 }
             }
-            egui::Event::MouseWheel { unit, delta, .. } if hover.is_some_and(|p| rect.contains(p)) => {
+            egui::Event::MouseWheel { unit, delta, .. } if hover.is_some_and(|p| visible.contains(p)) => {
                 let k = match unit {
                     egui::MouseWheelUnit::Point => 1.0,
                     egui::MouseWheelUnit::Line => 40.0,
