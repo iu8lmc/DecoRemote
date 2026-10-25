@@ -754,17 +754,16 @@ fn forward_input(
 
     sync_mods(vs, current_mods);
 
-    if let Some(p) = hover.filter(|p| visible.contains(*p)) {
-        let n = norm(p);
-        if vs.last_pos != Some(n) {
-            vs.last_pos = Some(n);
-            vs.last_move = std::time::Instant::now();
-            vs.viewer.send(ViewerMsg::MouseMove { x: n.0, y: n.1 });
-        }
-    }
+    // Un fotogramma dell'interfaccia può contenere decine di spostamenti del mouse: si inoltrano tutti,
+    // nell'ordine, altrimenti il tracciato sull'host diventa una spezzata che salta i punti intermedi.
+    let mut moved = false;
 
     for ev in events {
         match ev {
+            egui::Event::PointerMoved(pos) if visible.contains(pos) => {
+                moved = true;
+                send_move(vs, norm(pos));
+            }
             egui::Event::PointerButton { pos, button, pressed, .. } => {
                 let b = match button {
                     egui::PointerButton::Primary => MouseBtn::Left,
@@ -773,6 +772,7 @@ fn forward_input(
                     _ => continue,
                 };
                 let (x, y) = norm(pos);
+                vs.last_pos = Some((x, y));
                 if pressed && visible.contains(pos) {
                     vs.held.push(b);
                     vs.viewer.send(ViewerMsg::MouseButton { button: b, pressed, x, y });
@@ -791,6 +791,13 @@ fn forward_input(
                 vs.viewer.send(ViewerMsg::Wheel { dx: delta.x * k, dy: delta.y * k });
             }
             _ => {}
+        }
+    }
+
+    // Posizione corrente (anche senza eventi di movimento, per esempio dopo uno scorrimento o un cambio zoom).
+    if let Some(p) = hover.filter(|p| visible.contains(*p)) {
+        if !moved || vs.last_pos != Some(norm(p)) {
+            send_move(vs, norm(p));
         }
     }
 
@@ -814,6 +821,19 @@ fn forward_input(
             _ => {}
         }
     }
+}
+
+/// Inoltra una posizione del mouse (normalizzata) all'host, saltando le ripetizioni sullo stesso pixel remoto.
+fn send_move(vs: &mut ViewerState, n: (f32, f32)) {
+    let px = |v: f32, len: u32| (v * len.saturating_sub(1) as f32).round() as i32;
+    let pixel = |p: (f32, f32)| (px(p.0, vs.size[0] as u32), px(p.1, vs.size[1] as u32));
+    vs.last_move = std::time::Instant::now();
+    if vs.last_pos.map(pixel) == Some(pixel(n)) {
+        vs.last_pos = Some(n);
+        return;
+    }
+    vs.last_pos = Some(n);
+    vs.viewer.send(ViewerMsg::MouseMove { x: n.0, y: n.1 });
 }
 
 fn tap(vs: &mut ViewerState, c: char) {
