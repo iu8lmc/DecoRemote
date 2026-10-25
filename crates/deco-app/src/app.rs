@@ -9,6 +9,7 @@ use tokio::runtime::Handle;
 use crate::{
     config::{random_password, Config},
     host::{HostShared, HostStatus, APPROVAL_TIMEOUT},
+    share_ui::SharePanel,
     viewer::{Viewer, ViewerStatus},
 };
 
@@ -29,6 +30,9 @@ struct ViewerState {
     cursor_tex: std::collections::HashMap<u64, egui::TextureHandle>,
     held: Vec<MouseBtn>,
     quality: u8,
+    /// Pannello di chat e file aperto a destra.
+    show_share: bool,
+    panel: SharePanel,
     /// Adatta l'immagine alla finestra; altrimenti vale `zoom`.
     fit: bool,
     /// Ingrandimento manuale in percentuale (100 = un pixel remoto per pixel dello schermo locale).
@@ -65,6 +69,8 @@ pub struct App {
     view: Option<ViewerState>,
     /// Eventi tastiera sottratti a egui mentre si controlla un host remoto.
     key_events: Vec<egui::Event>,
+    /// Chat e file nel riquadro dell'host durante una sessione.
+    host_panel: SharePanel,
     /// Collegamento da avviare al primo frame (opzioni `--connect`/`--password`).
     auto_connect: Option<(String, String)>,
 }
@@ -102,6 +108,7 @@ impl App {
             net_check: Arc::new(std::sync::Mutex::new(None)),
             view: None,
             key_events: Vec::new(),
+            host_panel: SharePanel::default(),
             auto_connect,
         }
     }
@@ -124,6 +131,8 @@ impl App {
             cursor_tex: Default::default(),
             held: Vec::new(),
             quality: 60,
+            show_share: false,
+            panel: SharePanel::default(),
             fit: true,
             zoom: 100.0,
             fit_pct: 100.0,
@@ -155,7 +164,9 @@ fn format_id(id: &str) -> String {
 
 impl eframe::App for App {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        if self.view.is_none() {
+        let Some(view) = &self.view else { return };
+        // Se si sta scrivendo nella chat la tastiera resta a DecoRemote.
+        if view.show_share && view.panel.typing {
             return;
         }
         // Durante il controllo remoto la tastiera appartiene all'host: egui non deve vederla,
@@ -225,6 +236,15 @@ impl App {
                 self.this_computer_ui(&mut cols[0]);
                 connect = self.remote_ui(&mut cols[1]);
             });
+
+            let share = self.host.share.lock().unwrap().clone();
+            if let Some(share) = share {
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.label(RichText::new("Chat e file della sessione").strong());
+                    self.host_panel.host_ui(ui, &share);
+                });
+            }
 
             ui.add_space(8.0);
             egui::CollapsingHeader::new("Impostazioni").show(ui, |ui| {
@@ -519,6 +539,12 @@ fn viewer_ui(
                 if ui.add(egui::Slider::new(&mut vs.quality, 20..=95).show_value(false)).changed() {
                     vs.viewer.send(ViewerMsg::SetQuality(vs.quality));
                 }
+                let unread = vs.viewer.share.view.lock().unwrap().unread;
+                let label = if unread > 0 && !vs.show_share { format!("Chat e file ({unread})") } else { "Chat e file".into() };
+                let text = if unread > 0 && !vs.show_share { RichText::new(label).color(WARN) } else { RichText::new(label) };
+                if ui.add(egui::Button::new(text).selected(vs.show_share)).on_hover_text("Chat in tempo reale e trasferimento file (anche ADIF)").clicked() {
+                    vs.show_share = !vs.show_share;
+                }
                 ui.label("Zoom");
                 let shown = if vs.fit { vs.fit_pct } else { vs.zoom }.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
                 let mut pct = shown;
@@ -574,7 +600,21 @@ fn viewer_ui(
     }
     ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
+    let connected = matches!(status, ViewerStatus::Connected { .. });
+    let share = vs.viewer.share.clone();
+    if connected {
+        vs.panel.poll(&ctx, &share, true);
+        if vs.show_share {
+            egui::Panel::right("share").resizable(true).default_size(340.0).min_size(260.0).show(root, |ui| {
+                vs.panel.viewer_ui(ui, &share);
+            });
+        }
+    }
+
     egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::BLACK)).show(root, |ui| {
+        if connected {
+            crate::share_ui::drop_hint(&ctx, ui.max_rect());
+        }
         if let ViewerStatus::Closed(reason) = &status {
             ui.centered_and_justified(|ui| {
                 let text = reason.clone().unwrap_or_else(|| "La sessione è terminata.".into());

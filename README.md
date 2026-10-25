@@ -101,6 +101,17 @@ In *Impostazioni → Accesso non vigilato* si può far sì che il computer resti
 
 Limiti: serve una sessione Windows aperta (la schermata di blocco, il login e le finestre UAC non sono visibili: non c'è un servizio di sistema). ID e password danno il controllo completo del computer: usare una password lunga.
 
+## Chat e trasferimento file
+
+Durante una sessione, nella barra del viewer c'è **Chat e file** (a destra si apre un pannello); sull'host la stessa chat e l'elenco dei file compaiono nella finestra principale. Tutto viaggia nella stessa sessione cifrata, senza passare da altri servizi.
+
+- **Chat in tempo reale** in entrambe le direzioni, per dare piccole notizie all'utente remoto. Se la finestra dell'host è ridotta a icona, un messaggio la riporta in vista (senza rubare il focus).
+- **Invia file, immagini e log ADIF** (`.adi`, `.adif`) all'host: pulsanti con filtro dedicato oppure trascinando i file sulla finestra del viewer. Arrivano in `DocumentiDecoRemoteRicevuti` sull'host, senza mai sovrascrivere (`nome (1).adi`).
+- **Scarica dall'host:** *Sfoglia* le cartelle del PC remoto (documenti, desktop, dischi) oppure **Cerca log ADIF**, che trova i file `.adi/.adif` nelle cartelle usuali (WSJT-X, JTDX, Decodium, Documenti…) dal più recente. I file scaricati finiscono in `DocumentiDecoRemoteScaricati` sul viewer.
+- I file viaggiano a pezzi con controllo di flusso (finestra di 256 KB), così non soffocano video e comandi; limite di 2 GB a file. I nomi vengono ripuliti (niente percorsi, caratteri vietati o nomi riservati di Windows) e il file compare solo a trasferimento completo.
+
+Il protocollo è cambiato: host e viewer devono avere la stessa versione.
+
 ## Licenza
 
 MIT, vedi [LICENSE](LICENSE). `vendor/scrap` è una copia modificata di [scrap](https://github.com/quadrupleslap/scrap), anch'essa con licenza MIT.

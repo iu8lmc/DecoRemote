@@ -26,7 +26,11 @@ use tokio::{
 };
 use tracing::{info, warn};
 
-use crate::clip;
+use crate::{
+    clip,
+    share::{self, Role, Share},
+};
+use deco_proto::msg::ShareMsg;
 
 /// Frame accodati oltre i quali si rinuncia a recuperare e si chiede un keyframe (~0,4 s a 60 fps).
 const MAX_BACKLOG: usize = 24;
@@ -170,6 +174,8 @@ pub struct Viewer {
     pub stats: Arc<Stats>,
     pub cursor: Arc<Mutex<CursorState>>,
     pub tx: UnboundedSender<ViewerMsg>,
+    /// Chat e trasferimento file con l'host.
+    pub share: Share,
 }
 
 impl Viewer {
@@ -180,6 +186,18 @@ impl Viewer {
         let cursor = Arc::new(Mutex::new(CursorState::default()));
         let (tx, rx) = mpsc::unbounded_channel();
         let queue = Arc::new(Queue::default());
+
+        let (share, share_out) = {
+            let _runtime = rt.enter();
+            let (repaint, repaint_chat) = (ctx.clone(), ctx.clone());
+            share::start(
+                Role::Viewer,
+                share::default_recv_dir("Scaricati"),
+                move || repaint.request_repaint(),
+                move || repaint_chat.request_repaint(),
+            )
+        };
+        let share_task = share.clone();
 
         spawn_decoder(queue.clone(), frame.clone(), ctx.clone(), tx.clone());
 
@@ -193,15 +211,16 @@ impl Viewer {
                 cursor: &cursor_task,
                 ctx: &ctx_task,
                 tx: tx_task,
+                share: &share_task,
             };
-            let result = run(&server, &target, &password, rx, link).await;
+            let result = run(&server, &target, &password, rx, share_out, link).await;
             queue.close();
             let reason = result.err().map(|e| format!("{e:#}"));
             *status_task.lock().unwrap() = ViewerStatus::Closed(reason);
             ctx_task.request_repaint();
         });
 
-        Self { status, frame, stats, cursor, tx }
+        Self { status, frame, stats, cursor, tx, share }
     }
 
     pub fn status(&self) -> ViewerStatus {
@@ -291,6 +310,7 @@ struct Link<'a> {
     cursor: &'a Mutex<CursorState>,
     ctx: &'a egui::Context,
     tx: UnboundedSender<ViewerMsg>,
+    share: &'a Share,
 }
 
 async fn run(
@@ -298,6 +318,7 @@ async fn run(
     target: &str,
     password: &str,
     mut rx: mpsc::UnboundedReceiver<ViewerMsg>,
+    mut share_out: mpsc::UnboundedReceiver<ShareMsg>,
     link: Link<'_>,
 ) -> Result<()> {
     let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(server))
@@ -370,6 +391,9 @@ async fn run(
                 Some(text) = clip_out_rx.recv(), if approved.load(Ordering::SeqCst) => {
                     writer.send(&ViewerMsg::Clipboard(text)).await?
                 }
+                Some(m) = share_out.recv(), if approved.load(Ordering::SeqCst) => {
+                    writer.send(&ViewerMsg::Share(m)).await?
+                }
             }
         }
     };
@@ -440,6 +464,7 @@ async fn run(
                 }
                 link.ctx.request_repaint();
             }
+            HostMsg::Share(m) => link.share.incoming(m),
             HostMsg::Bye => return Ok(true),
         }
         Ok(false)

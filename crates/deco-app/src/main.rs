@@ -8,6 +8,8 @@ mod config;
 mod cursor;
 mod host;
 mod input;
+mod share;
+mod share_ui;
 mod viewer;
 
 use anyhow::{anyhow, Result};

@@ -25,3 +25,4 @@ tokio = { version = "1.54.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 windows-sys = { version = "0.61.2", features = ["Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Foundation"] }
+rfd = "0.17.2"

@@ -87,6 +87,7 @@ fn handle(enigo: &mut Enigo, st: &mut State, screens: &Screens, msg: ViewerMsg) 
         ViewerMsg::Clipboard(_) | ViewerMsg::SetQuality(_) | ViewerMsg::SelectScreen(_)
         | ViewerMsg::SetCodec(_)
         | ViewerMsg::RequestKeyframe
+        | ViewerMsg::Share(_)
         | ViewerMsg::Bye => {}
     }
     Ok(())

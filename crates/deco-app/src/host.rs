@@ -25,6 +25,7 @@ use tracing::{info, warn};
 use crate::{
     capture::{self, Encoded},
     clip, cursor, input,
+    share::{self, Role, Share},
 };
 
 const SERVER_SILENCE_LIMIT: Duration = Duration::from_secs(45);
@@ -60,6 +61,8 @@ pub struct HostShared {
     failed_logins: Mutex<Vec<Instant>>,
     pub server: Mutex<String>,
     pub password: Mutex<String>,
+    /// Chat e file della sessione in corso (None fuori sessione).
+    pub share: Mutex<Option<Share>>,
     /// Forza la riconnessione al server (es. dopo aver cambiato indirizzo).
     pub reconnect: Notify,
     /// Chiude la sessione in corso.
@@ -85,6 +88,7 @@ impl HostShared {
             failed_logins: Mutex::new(Vec::new()),
             server: Mutex::new(server),
             password: Mutex::new(password),
+            share: Mutex::new(None),
             reconnect: Notify::new(),
             stop_session: Notify::new(),
             ctx,
@@ -334,6 +338,24 @@ async fn stream_screen(
 
     let host_name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "host".into());
 
+    // Chat e file: se l'host è ridotto a icona un messaggio lo riporta in vista (senza rubare il focus).
+    let (share, mut share_out) = {
+        let (repaint, notify) = (shared.ctx.clone(), shared.ctx.clone());
+        share::start(
+            Role::Host,
+            share::default_recv_dir("Ricevuti"),
+            move || repaint.request_repaint(),
+            move || {
+                notify.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                notify.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                    egui::UserAttentionType::Informational,
+                ));
+                notify.request_repaint();
+            },
+        )
+    };
+    *shared.share.lock().unwrap() = Some(share.clone());
+
     // Con il collegamento diretto il video viaggia su una stream propria: un pacchetto perso nel video
     // non può ritardare cursore, appunti o risposte ai comandi.
     let mut video_lane = match direct {
@@ -371,6 +393,7 @@ async fn stream_screen(
             tokio::select! {
                 Some(text) = clip_out_rx.recv() => ctrl.lock().await.send(&HostMsg::Clipboard(text)).await?,
                 Some(msg) = reply_rx.recv() => ctrl.lock().await.send(&msg).await?,
+                Some(m) = share_out.recv() => ctrl.lock().await.send(&HostMsg::Share(m)).await?,
                 else => return Ok::<(), anyhow::Error>(()),
             }
         }
@@ -383,6 +406,7 @@ async fn stream_screen(
                 ViewerMsg::SetQuality(q) => controls.set_quality(q),
                 ViewerMsg::SetCodec(c) => controls.set_codec(c),
                 ViewerMsg::RequestKeyframe => controls.request_keyframe(),
+                ViewerMsg::Share(m) => share.incoming(m),
                 ViewerMsg::Clipboard(text) => {
                     let _ = clip_in_tx.send(text);
                 }
@@ -407,6 +431,7 @@ async fn stream_screen(
         _ = shared.stop_session.notified() => Ok(()),
     };
     stop.store(true, Ordering::Relaxed);
+    *shared.share.lock().unwrap() = None;
     let _ = ctrl.lock().await.send(&HostMsg::Bye).await;
     if direct.is_some() {
         // Lascia il tempo al Bye di partire prima che la connessione venga chiusa.

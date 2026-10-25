@@ -103,6 +103,43 @@ pub struct ScreenInfo {
     pub primary: bool,
 }
 
+/// Voce di una cartella del computer remoto.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    /// Percorso completo, da usare in `ListDir` e `FileRequest`.
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    /// Ultima modifica, in secondi Unix (0 se sconosciuta).
+    pub modified: u64,
+}
+
+/// Chat e trasferimento file: stessi messaggi in entrambe le direzioni (host <-> viewer).
+///
+/// Un file viaggia a pezzi con controllo di flusso: chi invia manda al massimo una finestra di pezzi
+/// oltre quanto confermato da `FileAck`, così il trasferimento non soffoca video e comandi.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ShareMsg {
+    Chat { text: String },
+    /// Proposta di invio. `request` è l'`id` della `FileRequest` a cui risponde (scaricamento).
+    FileOffer { id: u32, name: String, size: u64, request: Option<u32> },
+    FileAccept { id: u32 },
+    FileChunk { id: u32, data: Vec<u8> },
+    FileDone { id: u32 },
+    /// Il mittente interrompe il file `id`.
+    FileAbort { id: u32 },
+    /// Il destinatario rifiuta o interrompe il file `id` (anche una `FileRequest` non esaudibile).
+    FileStop { id: u32, reason: String },
+    /// Byte ricevuti finora per il file `id`.
+    FileAck { id: u32, received: u64 },
+    /// Il viewer chiede all'host di inviargli il file `path`.
+    FileRequest { id: u32, path: String },
+    /// Il viewer chiede il contenuto di una cartella ("" = punti di partenza, "adif:" = ricerca dei log ADIF).
+    ListDir { path: String },
+    DirList { path: String, parent: Option<String>, entries: Vec<DirEntry>, error: Option<String> },
+}
+
 /// Messaggi dall'host al viewer.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HostMsg {
@@ -123,6 +160,7 @@ pub enum HostMsg {
     /// Posizione (normalizzata sullo schermo trasmesso) e forma correnti del cursore dell'host.
     Cursor { x: f32, y: f32, shape: u64, visible: bool },
     Bye,
+    Share(ShareMsg),
 }
 
 /// Messaggi dal viewer all'host. Le coordinate sono normalizzate in 0.0..=1.0.
@@ -142,4 +180,5 @@ pub enum ViewerMsg {
     /// La decodifica ha perso il filo: l'host rimanda tutte le fasce come keyframe.
     RequestKeyframe,
     Bye,
+    Share(ShareMsg),
 }
