@@ -89,6 +89,18 @@ Dopo che il server ha messo in contatto viewer e host, i due si scambiano i prop
 - Il server deve avere aperta anche la **porta UDP** (la stessa del TCP, 21116). Il firewall di Windows può chiedere il consenso al primo avvio del client.
 - `DECOREMOTE_NO_UDP=1` disattiva il collegamento diretto (utile per diagnosi).
 
+## Accesso non vigilato
+
+In *Impostazioni → Accesso non vigilato* si può far sì che il computer resti raggiungibile senza nessuno davanti:
+
+- **Senza conferma:** chi conosce ID e password entra senza che l'host debba consentire.
+- **Resta attivo:** chiudendo la finestra il programma si riduce a icona e l'host resta online; per uscire davvero c'è *Esci da DecoRemote*.
+- **Avvio con Windows:** il programma parte da solo (ridotto a icona, opzione `--minimized`) quando l'utente accede. Usa la chiave `Run` dell'utente, senza privilegi di amministratore.
+- **Password fissa:** si può impostare una password propria (almeno 8 caratteri) al posto di quella generata.
+- **Protezione:** dopo 5 password errate l'host rifiuta ogni richiesta per 10 minuti.
+
+Limiti: serve una sessione Windows aperta (la schermata di blocco, il login e le finestre UAC non sono visibili: non c'è un servizio di sistema). ID e password danno il controllo completo del computer: usare una password lunga.
+
 ## Licenza
 
 MIT, vedi [LICENSE](LICENSE). `vendor/scrap` è una copia modificata di [scrap](https://github.com/quadrupleslap/scrap), anch'essa con licenza MIT.

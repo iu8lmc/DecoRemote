@@ -14,6 +14,9 @@ pub struct Config {
     /// Chiede conferma all'utente dell'host a ogni nuova connessione.
     #[serde(default = "default_true")]
     pub require_confirmation: bool,
+    /// Accesso non vigilato: niente conferma e, chiudendo la finestra, il programma resta attivo ridotto a icona.
+    #[serde(default)]
+    pub unattended: bool,
 }
 
 fn default_true() -> bool {
@@ -48,6 +51,7 @@ impl Config {
                 password: random_password(),
                 server: DEFAULT_SERVER.to_string(),
                 require_confirmation: true,
+                unattended: false,
             };
             cfg.save();
             cfg

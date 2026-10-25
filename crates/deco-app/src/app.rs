@@ -49,6 +49,16 @@ pub struct App {
     peer_id: String,
     peer_pw: String,
     server_edit: String,
+    /// Nuova password digitata nelle impostazioni (vuota = nessuna modifica).
+    new_pw: String,
+    /// Esito dell'ultima modifica delle impostazioni di accesso non vigilato.
+    unattended_note: Option<String>,
+    /// Avvio con Windows attivo (letto dal registro all'avvio e aggiornato dall'interfaccia).
+    autostart: bool,
+    /// L'utente ha chiesto di uscire davvero (altrimenti, con l'accesso non vigilato, chiudere riduce a icona).
+    quitting: bool,
+    /// Avviato con `--minimized` (avvio automatico): riduce a icona al primo frame.
+    start_minimized: bool,
     notice: Option<String>,
     /// Esito dell'ultima verifica di rete (None = mai eseguita, Some("") = in corso).
     net_check: Arc<std::sync::Mutex<Option<String>>>,
@@ -65,6 +75,7 @@ impl App {
         rt: Handle,
         cfg: Config,
         auto_connect: Option<(String, String)>,
+        start_minimized: bool,
     ) -> Self {
         setup_style(&cc.egui_ctx);
         let host = HostShared::new(
@@ -78,6 +89,11 @@ impl App {
         Self {
             rt,
             server_edit: cfg.server.clone(),
+            new_pw: String::new(),
+            unattended_note: None,
+            autostart: crate::autostart::is_enabled(),
+            quitting: false,
+            start_minimized,
             cfg,
             host,
             peer_id: String::new(),
@@ -159,6 +175,15 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Con l'accesso non vigilato chiudere la finestra non spegne l'host: il programma si riduce a icona.
+        let ctx = ui.ctx().clone();
+        if std::mem::take(&mut self.start_minimized) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        if self.cfg.unattended && !self.quitting && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
         if let Some((id, pw)) = self.auto_connect.take() {
             (self.peer_id, self.peer_pw) = (id, pw);
             let ctx = ui.ctx().clone();
@@ -179,6 +204,8 @@ impl App {
     fn main_ui(&mut self, ui: &mut egui::Ui) {
         let mut connect = false;
         egui::CentralPanel::default().show(ui, |ui| {
+            // Con le impostazioni aperte il contenuto può superare l'altezza della finestra.
+            egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(RichText::new("DecoRemote").color(ACCENT).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -201,14 +228,8 @@ impl App {
 
             ui.add_space(8.0);
             egui::CollapsingHeader::new("Impostazioni").show(ui, |ui| {
-                if ui
-                    .checkbox(&mut self.cfg.require_confirmation, "Chiedi conferma a ogni nuova connessione")
-                    .on_hover_text("Se disattivata, chi conosce ID e password entra senza che tu debba consentire.")
-                    .changed()
-                {
-                    self.cfg.save();
-                    self.host.require_confirmation.store(self.cfg.require_confirmation, Ordering::SeqCst);
-                }
+                self.unattended_ui(ui);
+                ui.separator();
                 ui.horizontal(|ui| {
                     let running = self.net_check.lock().unwrap().as_deref() == Some("");
                     if ui.add_enabled(!running, egui::Button::new("Verifica rete")).clicked() {
@@ -243,10 +264,74 @@ impl App {
                     }
                 });
             });
+            });
         });
         if connect {
             let ctx = ui.ctx().clone();
             self.connect(&ctx);
+        }
+    }
+
+    /// Impostazioni dell'accesso non vigilato: senza conferma, sempre attivo, avvio con Windows, password fissa.
+    fn unattended_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Accesso non vigilato").strong());
+        if ui
+            .checkbox(&mut self.cfg.unattended, "Consenti l'accesso senza conferma e resta attivo in background")
+            .on_hover_text(
+                "Chi conosce ID e password entra senza che nessuno debba consentire. \
+                 Chiudendo la finestra il programma si riduce a icona e l'host resta raggiungibile.",
+            )
+            .changed()
+        {
+            self.cfg.require_confirmation = !self.cfg.unattended;
+            self.cfg.save();
+            self.host.require_confirmation.store(self.cfg.require_confirmation, Ordering::SeqCst);
+        }
+        if self.cfg.unattended {
+            ui.label(
+                RichText::new(
+                    "Attenzione: ID e password danno il controllo completo di questo computer. \
+                     Usa una password lunga e non comunicarla. Dopo 5 password errate le richieste \
+                     vengono rifiutate per 10 minuti.",
+                )
+                .color(WARN)
+                .small(),
+            );
+            ui.label(
+                RichText::new("Non funziona sulla schermata di blocco o di accesso di Windows: serve una sessione aperta.")
+                    .color(Color32::GRAY)
+                    .small(),
+            );
+        }
+        if ui
+            .checkbox(&mut self.autostart, "Avvia DecoRemote con Windows (ridotto a icona)")
+            .on_hover_text("Così l'host torna online da solo dopo un riavvio, appena accedi a Windows.")
+            .changed()
+            && !crate::autostart::set(self.autostart)
+        {
+            self.autostart = crate::autostart::is_enabled();
+            self.unattended_note = Some("Impossibile modificare l'avvio automatico.".into());
+        }
+        ui.horizontal(|ui| {
+            ui.label("Password fissa");
+            ui.add(egui::TextEdit::singleline(&mut self.new_pw).password(true).hint_text("almeno 8 caratteri"));
+            let new = self.new_pw.trim().to_string();
+            if ui.add_enabled(new.chars().count() >= 8, egui::Button::new("Imposta")).clicked() {
+                self.cfg.password = new;
+                self.cfg.save();
+                *self.host.password.lock().unwrap() = self.cfg.password.clone();
+                self.new_pw.clear();
+                self.unattended_note = Some("Password aggiornata.".into());
+            }
+        });
+        if let Some(note) = &self.unattended_note {
+            ui.label(RichText::new(note).color(Color32::GRAY).small());
+        }
+        if self.cfg.unattended
+            && ui.button("Esci da DecoRemote").on_hover_text("Chiude il programma e porta l'host offline.").clicked()
+        {
+            self.quitting = true;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -305,7 +390,8 @@ impl App {
             });
 
             ui.label("Password");
-            ui.horizontal(|ui| {
+            // A capo se la password (anche scelta dall'utente) è lunga: i pulsanti non devono uscire dal riquadro.
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(&self.cfg.password).monospace().size(18.0));
                 if ui.button("Copia").clicked() {
                     ui.ctx().copy_text(self.cfg.password.clone());

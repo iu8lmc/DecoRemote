@@ -31,6 +31,9 @@ const SERVER_SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const DEFAULT_QUALITY: u8 = 60;
 /// Tempo concesso all'utente dell'host per consentire o rifiutare una connessione.
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Password errate tollerate in `LOCKOUT` prima di rifiutare ogni nuova richiesta (protegge l'accesso non vigilato).
+const MAX_FAILED_LOGINS: usize = 5;
+const LOCKOUT: Duration = Duration::from_secs(10 * 60);
 
 struct Pending {
     since: Instant,
@@ -53,6 +56,8 @@ pub struct HostShared {
     pub active: AtomicBool,
     pub require_confirmation: AtomicBool,
     pending: Mutex<Option<Pending>>,
+    /// Istanti delle password errate recenti.
+    failed_logins: Mutex<Vec<Instant>>,
     pub server: Mutex<String>,
     pub password: Mutex<String>,
     /// Forza la riconnessione al server (es. dopo aver cambiato indirizzo).
@@ -77,6 +82,7 @@ impl HostShared {
             active: AtomicBool::new(false),
             require_confirmation: AtomicBool::new(require_confirmation),
             pending: Mutex::new(None),
+            failed_logins: Mutex::new(Vec::new()),
             server: Mutex::new(server),
             password: Mutex::new(password),
             reconnect: Notify::new(),
@@ -123,6 +129,13 @@ impl HostShared {
     fn clear_pending(&self) {
         *self.pending.lock().unwrap() = None;
         self.ctx.request_repaint();
+    }
+
+    /// `true` se ci sono stati troppi tentativi falliti da poco.
+    fn locked_out(&self) -> bool {
+        let mut failed = self.failed_logins.lock().unwrap();
+        failed.retain(|t| t.elapsed() < LOCKOUT);
+        failed.len() >= MAX_FAILED_LOGINS
     }
 
     fn server(&self) -> String {
@@ -202,6 +215,9 @@ async fn session(shared: &Arc<HostShared>, token: u64) -> Result<()> {
     }
     let _guard = SessionGuard(shared);
     shared.ctx.request_repaint();
+    if shared.locked_out() {
+        bail!("troppe password errate: richieste rifiutate per {} minuti", LOCKOUT.as_secs() / 60);
+    }
 
     let server = shared.server();
     // Indirizzi UDP per il collegamento diretto (None se UDP non è disponibile).
@@ -248,9 +264,20 @@ async fn session(shared: &Arc<HostShared>, token: u64) -> Result<()> {
         }
     };
     info!("percorso dati: {}", if direct.is_some() { "QUIC diretto" } else { "relay TCP" });
-    let (mut reader, mut writer) = timeout(Duration::from_secs(15), handshake_responder(read, write, &psk))
+    let handshake = timeout(Duration::from_secs(15), handshake_responder(read, write, &psk))
         .await
-        .map_err(|_| anyhow!("handshake scaduto"))??;
+        .map_err(|_| anyhow!("handshake scaduto"))?;
+    let (mut reader, mut writer) = match handshake {
+        Ok(channel) => channel,
+        Err(e) => {
+            if format!("{e:#}").contains("password errata") {
+                shared.failed_logins.lock().unwrap().push(Instant::now());
+                warn!("password errata da un viewer");
+            }
+            return Err(e);
+        }
+    };
+    shared.failed_logins.lock().unwrap().clear();
     info!("viewer autenticato");
 
     if shared.require_confirmation.load(Ordering::SeqCst) {
