@@ -3,22 +3,29 @@
 use std::{
     sync::{mpsc::Receiver, Arc},
     thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use deco_proto::msg::{Key, Mods, MouseBtn, ViewerMsg};
 use enigo::{Axis, Button, Direction, Enigo, Key as EKey, Keyboard, Mouse, Settings};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::capture::Screens;
 
 /// Pixel di scroll del viewer che corrispondono a una "tacca" della rotella.
 const PIXELS_PER_NOTCH: f32 = 40.0;
 
-pub fn spawn(rx: Receiver<ViewerMsg>, screens: Arc<Screens>) {
+/// Intervallo minimo fra due segnalazioni di errore al viewer.
+const REPORT_EVERY: Duration = Duration::from_secs(30);
+
+/// `report` riceve il testo da mostrare al viewer quando l'host non riesce a iniettare l'input
+/// (di solito perché Windows lo blocca: finestra avviata come amministratore, `BlockInput`, desktop protetto).
+pub fn spawn(rx: Receiver<ViewerMsg>, screens: Arc<Screens>, report: impl Fn(String) + Send + 'static) {
     thread::spawn(move || {
-        if let Err(e) = run(rx, &screens) {
+        if let Err(e) = run(rx, &screens, &report) {
             warn!("input: {e:#}");
+            report(format!("Attenzione: l'host non può iniettare mouse e tastiera ({e:#})."));
         }
     });
 }
@@ -31,12 +38,20 @@ struct State {
     scroll_y: f32,
 }
 
-fn run(rx: Receiver<ViewerMsg>, screens: &Screens) -> Result<()> {
+fn run(rx: Receiver<ViewerMsg>, screens: &Screens, report: &impl Fn(String)) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())?;
     let mut st = State::default();
+    let mut last_report: Option<Instant> = None;
     while let Ok(msg) = rx.recv() {
         if let Err(e) = handle(&mut enigo, &mut st, screens, msg) {
-            debug!("input ignorato: {e}");
+            warn!("input rifiutato: {e:#}");
+            if last_report.is_none_or(|t| t.elapsed() >= REPORT_EVERY) {
+                last_report = Some(Instant::now());
+                report(format!(
+                    "Attenzione: Windows rifiuta l'input su questo computer ({e:#}). {}",
+                    elevation_hint()
+                ));
+            }
         }
     }
     // Sessione finita: rilascia tutto per non lasciare tasti o pulsanti "incastrati".
@@ -177,4 +192,45 @@ fn map_key(key: Key) -> Option<EKey> {
         Key::Char(c) if c.is_ascii_alphanumeric() => EKey::Other(c.to_ascii_uppercase() as u32),
         Key::Char(c) => EKey::Unicode(c),
     })
+}
+
+/// Suggerimento sulla causa più comune: l'host non ha i privilegi della finestra che riceve l'input.
+fn elevation_hint() -> &'static str {
+    if is_elevated() {
+        "DecoRemote è avviato come amministratore: controlla se un altro programma blocca l'input (BlockInput) o se è aperta una schermata protetta (UAC, blocco)."
+    } else {
+        "DecoRemote non è avviato come amministratore: Windows non lascia inviare click e tasti ai programmi che lo sono. Riavvia DecoRemote con «Esegui come amministratore»."
+    }
+}
+
+#[cfg(windows)]
+pub fn is_elevated() -> bool {
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    // SAFETY: handle e buffer locali, `GetTokenInformation` scrive al più `size_of::<TOKEN_ELEVATION>()` byte.
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut _,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        );
+        CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
+}
+
+#[cfg(not(windows))]
+pub fn is_elevated() -> bool {
+    false
 }

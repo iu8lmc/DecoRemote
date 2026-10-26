@@ -325,7 +325,6 @@ async fn stream_screen(
     capture::spawn(frame_tx, controls.clone(), stop.clone(), screens.clone());
 
     let (input_tx, input_rx) = std_mpsc::channel::<ViewerMsg>();
-    input::spawn(input_rx, screens.clone());
 
     let (clip_out_tx, mut clip_out_rx) = mpsc::unbounded_channel();
     let (clip_in_tx, clip_in_rx) = std_mpsc::channel();
@@ -355,6 +354,15 @@ async fn stream_screen(
         )
     };
     *shared.share.lock().unwrap() = Some(share.clone());
+
+    // Se Windows rifiuta l'input, il viewer lo scopre dalla chat invece di vedere comandi che non rispondono.
+    let reporter = share.clone();
+    input::spawn(input_rx, screens.clone(), move |text| reporter.chat(&text));
+    share.chat(&format!(
+        "Host DecoRemote v{}, {}.",
+        env!("CARGO_PKG_VERSION"),
+        if input::is_elevated() { "avviato come amministratore" } else { "utente normale" }
+    ));
 
     // Con il collegamento diretto il video viaggia su una stream propria: un pacchetto perso nel video
     // non può ritardare cursore, appunti o risposte ai comandi.
